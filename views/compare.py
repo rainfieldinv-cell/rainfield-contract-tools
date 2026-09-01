@@ -11,7 +11,6 @@
 """
 
 import os
-import uuid
 
 import streamlit as st
 
@@ -24,7 +23,6 @@ from utils.analyze import (
     compare_findings,
 )
 from utils.loader import process_uploaded_documents
-from utils.memo import load_memos, save_memos
 from utils.ocr import ocr_pdf_pages
 from utils.pdf_utils import join_all_text
 from utils.render import render_page_image
@@ -801,59 +799,6 @@ def render_compare():
             on_click=goto_linear, args=(1,),
             type="primary", use_container_width=True,
         )
-
-
-# ─────────────────────────────────────────────
-# "메모" 화면: 제목/문제점/추가의견 입력 → 파일에 저장(껐다 켜도 유지)
-# ─────────────────────────────────────────────
-def render_memo():
-    st.header("📝 메모")
-    st.caption("사업별 문제점·의견을 적어 저장해두는 공간입니다. (파일에 저장되어 유지)")
-
-    # 새 메모 입력 (제출하면 자동으로 칸 비움)
-    with st.form("memo_form", clear_on_submit=True):
-        title = st.text_input("제목(사업명)")
-        problem = st.text_area("문제점")
-        opinion = st.text_area("추가의견")
-        submitted = st.form_submit_button("➕ 새 메모 추가", type="primary")
-
-    if submitted:
-        if not (title.strip() or problem.strip() or opinion.strip()):
-            st.warning("내용을 한 가지 이상 입력해 주세요.")
-        else:
-            memos = load_memos()
-            memos.append(
-                {
-                    "id": uuid.uuid4().hex,
-                    "제목": title.strip(),
-                    "문제점": problem.strip(),
-                    "추가의견": opinion.strip(),
-                }
-            )
-            save_memos(memos)
-            st.success("메모를 저장했습니다.")
-
-    st.divider()
-    st.subheader("저장된 메모")
-
-    memos = load_memos()
-    if not memos:
-        st.info("저장된 메모가 없습니다")
-        return
-
-    # 최신 메모가 위로 오게 역순 표시
-    for m in reversed(memos):
-        with st.container(border=True):
-            top, btn = st.columns([5, 1])
-            top.markdown(f"### {m.get('제목') or '(제목 없음)'}")
-            if btn.button("🗑 삭제", key=f"del_{m['id']}"):
-                remaining = [x for x in load_memos() if x["id"] != m["id"]]
-                save_memos(remaining)
-                st.rerun()
-            if m.get("문제점"):
-                st.markdown(f"**문제점**\n\n{m['문제점']}")
-            if m.get("추가의견"):
-                st.markdown(f"**추가의견**\n\n{m['추가의견']}")
 
 
 # ─────────────────────────────────────────────
