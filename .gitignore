@@ -17,6 +17,9 @@ tmp/
 # 메모 저장 파일(각 환경별로 보관)
 memo.json
 
+# 예전 앱(doc-compare / contract-scan) 백업 폴더 — 내 컴퓨터에만 두고 GitHub엔 안 올림
+_보관*/
+
 # OS 잡파일
 .DS_Store
 Thumbs.db
