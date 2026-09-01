@@ -329,6 +329,70 @@ def render_step1():
 # ─────────────────────────────────────────────
 # 2단계: 키워드 고르기 + 찾기 실행 + 결과
 # ─────────────────────────────────────────────
+def extra_key(contract_type: str) -> str:
+    """이 화면에서 직접 추가한 항목 목록(계약서 종류별로 따로 기억)."""
+    return f"extra::{contract_type}"
+
+
+def _add_extra_item(contract_type: str):
+    """입력칸에 적은 항목을 목록에 추가(콜백)."""
+    box = f"extra_input::{contract_type}"
+    text = (st.session_state.get(box) or "").strip()
+    if not text:
+        return
+    items = st.session_state.setdefault(extra_key(contract_type), [])
+    if text not in items:
+        items.append(text)
+        st.session_state[kw_key(contract_type, text)] = True  # 추가하면 바로 체크됨
+    st.session_state[box] = ""  # 입력칸 비우기
+
+
+def _render_extra_items(contract_type: str) -> list:
+    """
+    ✏️ 직접 추가한 항목 — 시트 항목 블록과 같은 모양(2열 체크박스)으로 그립니다.
+    이번 검토에만 쓰이고, 브라우저를 새로 열면 사라집니다.
+    """
+    items = st.session_state.get(extra_key(contract_type), [])
+
+    st.markdown(f"**✏️ 직접 추가한 항목 ({len(items)}개)**")
+    st.caption(
+        "시트에 없는 걸 이번 한 번만 찾아볼 때 쓰세요. (브라우저를 새로 열면 사라집니다) "
+        "계속 쓸 항목이면 위의 **📋 시트**에 적어두세요. "
+        "단어보다 **찾고 싶은 내용을 문장으로** 적으면 더 정확합니다."
+    )
+
+    with st.container(border=True):
+        in_col, add_col = st.columns([0.85, 0.15])
+        in_col.text_input(
+            "추가할 항목", key=f"extra_input::{contract_type}",
+            placeholder="예: 조기상환수수료가 있는지 / 대주 변경(양도) 제한 조항",
+            label_visibility="collapsed",
+        )
+        add_col.button("➕ 추가", key=f"extra_add::{contract_type}",
+                       use_container_width=True,
+                       on_click=_add_extra_item, args=(contract_type,))
+
+        if not items:
+            st.caption("아직 직접 추가한 항목이 없습니다.")
+            return items
+
+        cols = st.columns(2)
+        for i, text in enumerate(list(items)):
+            with cols[i % 2]:
+                chk_col, del_col = st.columns([0.9, 0.1])
+                with chk_col:
+                    key = kw_key(contract_type, text)
+                    st.session_state.setdefault(key, True)
+                    st.checkbox(text, key=key)
+                if del_col.button("🗑", key=f"extra_del::{contract_type}::{i}",
+                                  help="이 항목 지우기"):
+                    items.pop(i)
+                    st.session_state[extra_key(contract_type)] = items
+                    st.rerun()
+
+    return items
+
+
 def render_step2():
     contract_type = st.session_state.get("contract_type", contract_types[0])
     contract = st.session_state.get("sc_contract")
@@ -350,7 +414,9 @@ def render_step2():
         )
         return
 
+    extras_saved = st.session_state.get(extra_key(contract_type), [])
     all_keywords = own + [k for k in common if k not in own]
+    all_keywords += [k for k in extras_saved if k not in all_keywords]
 
     btn1, btn2, _sp = st.columns([1, 1, 2])
     btn1.button(
@@ -382,10 +448,14 @@ def render_step2():
         caption="계약서 종류와 상관없이 항상 함께 보는 항목입니다.",
     )
 
+    # ── 이번 검토에만 쓸 항목을 화면에서 바로 추가 ──
+    extras = _render_extra_items(contract_type)
+
     selected = [k for k in all_keywords if st.session_state.get(kw_key(contract_type, k))]
     st.caption(
         f"선택한 항목: **{len(selected)}개** / 전체 {len(all_keywords)}개 "
-        f"({contract_type} {len(own)}개 + {COMMON_COLUMN} {len(common)}개)"
+        f"({contract_type} {len(own)}개 + {COMMON_COLUMN} {len(common)}개"
+        + (f" + 직접 추가 {len(extras)}개" if extras else "") + ")"
     )
 
     # ── 찾기 실행 (같은 단계에서 바로) ──
