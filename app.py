@@ -40,10 +40,23 @@ st.markdown(
     .home-hero { text-align:center; padding: 6px 0 2px; }
     .home-hero h1 { margin-bottom: 6px; }
     .home-hero p { color:#666; font-size:15px; margin-top:0; }
+
+    /* 카드 두 개의 높이를 서로 똑같이 맞추고, 시작 버튼을 아래에 나란히 */
+    .st-key-toolrow [data-testid="stColumn"] { display: flex; }
+    .st-key-toolrow [data-testid="stColumn"] > div,
+    .st-key-toolrow [data-testid="stVerticalBlockBorderWrapper"] { width: 100%; height: 100%; }
+    .st-key-toolrow [data-testid="stVerticalBlockBorderWrapper"] > div,
+    .st-key-toolrow [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] {
+        height: 100%;
+    }
+    .st-key-toolrow [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] {
+        display: flex; flex-direction: column; justify-content: space-between;
+    }
+
     .tool-card { text-align:center; padding: 6px 4px 2px; }
     .tool-card .emoji { font-size: 46px; line-height: 1.1; }
     .tool-card .name { font-size: 20px; font-weight: 700; color:#1A2B5E; margin-top: 6px; }
-    .tool-card .desc { color:#555; font-size: 14px; margin: 10px 0 4px; min-height: 66px; }
+    .tool-card .desc { color:#555; font-size: 14px; margin: 10px 0 4px; min-height: 84px; }
     .tool-card .need { color:#888; font-size: 13px; margin-bottom: 10px; }
     </style>
     """,
@@ -55,7 +68,7 @@ TOOLS = {
         "emoji": "📄",
         "name": "계약서 · IM 비교",
         "desc": "계약서와 제안서(IM)를 나란히 대조해 <b>다른 부분</b>을 찾고, "
-                "계약서 기준으로 제안서를 어떻게 고쳐야 하는지 정리합니다.",
+                "어떻게 고쳐야 하는지 정리합니다.",
         "need": "필요한 파일 : 계약서 1개 + 제안서(IM) 1개",
         "file": "views/compare.py",
     },
@@ -63,7 +76,7 @@ TOOLS = {
         "emoji": "🔎",
         "name": "계약서 항목 찾기",
         "desc": "구글 시트에 적어둔 검토 항목을 계약서에서 찾아, "
-                "<b>원본 페이지에 형광펜</b>으로 어디에 있는지 보여줍니다.",
+                "<b>원본 페이지에 형광펜</b>으로 보여줍니다.",
         "need": "필요한 파일 : 계약서 1개",
         "file": "views/scan.py",
     },
@@ -89,7 +102,8 @@ def render_home():
 
     _l, mid, _r = st.columns([0.5, 3, 0.5])
     with mid:
-        cols = st.columns(2, gap="large")
+        row = st.container(key="toolrow")
+        cols = row.columns(2, gap="large")
         for col, (key, t) in zip(cols, TOOLS.items()):
             with col:
                 with st.container(border=True):
