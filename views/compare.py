@@ -763,12 +763,12 @@ def render_compare():
         if sub == SUB_READ[0]:
             render_document_section(
                 "계약서", "contract",
-                "워드 권장 · PDF보다 워드가 더 정확합니다",
+                "PDF 권장 · 워드밖에 없으면 위 안내대로 PDF로 저장",
             )
         else:
             render_document_section(
                 "제안서", "im",
-                "PDF / 워드 / 파워포인트",
+                "PDF 권장 · 워드/파워포인트도 가능",
             )
     elif sec == BIG_SECTIONS[1]:
         sub = _subtabs("sub_fin", SUB_FIN)
