@@ -22,6 +22,7 @@ from utils.analyze import (
     analyze_rights,
     compare_findings,
 )
+from utils.guide import render_upload_guide
 from utils.loader import process_uploaded_documents
 from utils.ocr import ocr_pdf_pages
 from utils.pdf_utils import join_all_text
@@ -96,19 +97,24 @@ def render_document_section(label: str, session_key: str, upload_hint: str):
     upload_hint : 업로드 칸 안내 문구(괄호 안 내용)
     """
     st.header(f"{label} 업로드")
+    render_upload_guide(label)
     st.caption(
-        f"{label}를 **워드+PDF로 함께** 올려주세요. "
-        f"워드가 있으면 글자 인식이 더 정확합니다. ({upload_hint})"
+        f"{label} 파일 **하나**만 올려주세요. **글자가 살아있는 PDF가 가장 좋습니다** "
+        f"— 상대방이 보낸 원본 그대로의 페이지·모양으로 보여주기 때문입니다. ({upload_hint}) "
+        "워드 파일을 그대로 올리면 서버에서 PDF로 바꿔 읽는데, 서버 사정에 따라 변환이 안 될 수 있고 "
+        "글자가 겹쳐 보이거나 페이지 번호가 달라질 수 있습니다. "
+        "그래서 **PDF로 저장해서 올리는 쪽을 권합니다.**"
     )
 
-    files = st.file_uploader(
-        f"{label} 파일 (워드/PDF)",
+    uploaded = st.file_uploader(
+        f"{label} 파일 (PDF 또는 워드)",
         type=["pdf", "docx", "doc", "pptx", "ppt"],
-        accept_multiple_files=True,
+        accept_multiple_files=False,
         key=f"uploader_{session_key}",  # 탭마다 업로더를 구분
         label_visibility="collapsed",
     )
 
+    files = [uploaded] if uploaded else []
     if not files:
         st.info(f"위에 {label} 파일을 올리면 텍스트 추출이 시작됩니다.")
         return
