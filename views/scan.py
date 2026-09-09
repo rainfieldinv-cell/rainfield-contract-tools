@@ -17,7 +17,7 @@ import os
 
 import streamlit as st
 
-from utils.guide import render_upload_guide
+from utils.guide import render_upload_guide_boxes
 from utils.keywords import load_keywords
 from utils.loader import process_uploaded_documents
 from utils.ocr import ocr_pdf_pages
@@ -105,9 +105,6 @@ st.warning(
     "⚠️ 이 도구의 결과는 **법적 판단이 아니라 검토 보조용**입니다. "
     "중요한 결정은 반드시 담당자가 원본 계약서를 직접 확인하세요."
 )
-
-# 파일 올리기 안내 (접었다 폈다)
-render_upload_guide()
 
 # 라디오를 '탭 모양' 으로 보이게 (자금판·계약서 비교와 같은 남색 테마)
 st.markdown(
@@ -247,6 +244,7 @@ def render_step1():
 
     st.divider()
     st.subheader("계약서 파일 올리기")
+    render_upload_guide_boxes()
     st.caption(
         "계약서 파일 **하나**만 올려주세요. **글자가 살아있는 PDF가 가장 좋습니다** "
         "— 상대방이 보낸 원본 그대로의 페이지·모양으로 보여주기 때문입니다. "
