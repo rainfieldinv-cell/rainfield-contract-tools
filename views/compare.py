@@ -86,6 +86,9 @@ st.warning(
     "중요한 결정은 반드시 담당자가 원본 문서를 직접 확인하세요."
 )
 
+# 파일 올리기 안내 (접었다 폈다)
+render_upload_guide()
+
 
 # ─────────────────────────────────────────────
 # 문서 1개를 처리하고 화면에 보여주는 공통 함수
@@ -97,7 +100,6 @@ def render_document_section(label: str, session_key: str, upload_hint: str):
     upload_hint : 업로드 칸 안내 문구(괄호 안 내용)
     """
     st.header(f"{label} 업로드")
-    render_upload_guide(label)
     st.caption(
         f"{label} 파일 **하나**만 올려주세요. **글자가 살아있는 PDF가 가장 좋습니다** "
         f"— 상대방이 보낸 원본 그대로의 페이지·모양으로 보여주기 때문입니다. ({upload_hint}) "
