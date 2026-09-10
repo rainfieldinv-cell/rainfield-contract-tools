@@ -65,9 +65,10 @@ def load_keywords_cached(url: str) -> dict:
 
 
 @st.cache_data(show_spinner=False)
-def cached_page_image(pdf_path: str, page: int, highlight: str) -> bytes:
+def cached_page_image(pdf_path: str, page: int, highlight: str,
+                      focus: bool = False) -> bytes:
     """같은 페이지·같은 형광펜이면 이미지를 다시 만들지 않습니다."""
-    return render_page_image(pdf_path, page, highlight_text=highlight)
+    return render_page_image(pdf_path, page, highlight_text=highlight, focus=focus)
 
 
 def reset_all():
@@ -520,8 +521,13 @@ def render_results(contract):
     )
     opt1, opt2, opt3 = st.columns([0.34, 0.45, 0.21])
     show_image = opt1.checkbox("원본 페이지 이미지(형광펜) 함께 보기", value=True)
+    focus_mode = opt1.checkbox(
+        "찾은 부분만 잘라서 크게 보기", value=True,
+        help="형광펜 친 곳 둘레만 잘라 보여줍니다. 체크를 빼면 페이지 전체가 나옵니다.",
+    )
     opt2.radio(
         "기본 이미지 크기", list(IMAGE_WIDTHS), key="img_size",
+        index=list(IMAGE_WIDTHS).index("크게"),  # 잘라서 보여주므로 크게가 기본
         horizontal=True, label_visibility="collapsed",
     )
     apply_all = opt3.button("모든 이미지에 적용", use_container_width=True,
@@ -620,6 +626,7 @@ def render_results(contract):
                         img = cached_page_image(
                             contract["pdf_path"], page,
                             item.get("원문") or item.get("내용", ""),
+                            focus_mode,
                         )
                         if width:
                             # 가운데 정렬: 양옆에 빈 칸을 두고 가운데 칸에 그림

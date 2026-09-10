@@ -11,12 +11,15 @@ def render_page_image(
     page_number: int,
     highlight_text: str = "",
     zoom: float = 3.0,
+    focus: bool = False,
 ) -> bytes:
     """
     pdf_path      : PDF 경로
     page_number   : 사람이 보는 페이지 번호(1부터)
     highlight_text: 강조하고 싶은 내용(원문). 페이지에서 찾으면 노란색 표시.
     zoom          : 이미지 확대 배율 (클수록 선명, 느림)
+    focus         : True 면 형광펜 친 부분 둘레만 잘라냄(글씨가 크게 보임).
+                    형광펜을 못 찾으면 페이지 전체를 그립니다.
     반환값        : PNG 이미지 바이트 (st.image 에 바로 넣을 수 있음)
     """
     doc = fitz.open(pdf_path)
@@ -27,16 +30,44 @@ def render_page_image(
     page = doc[index]
 
     # 강조 표시 시도 (원문 전체가 칠해지도록 줄 단위로 찾음)
-    if highlight_text:
-        _highlight(page, highlight_text)
+    rects = _highlight(page, highlight_text) if highlight_text else []
 
     # 글자/그림이 있는 부분만 잘라내기(원본의 빈 회색 여백 제거)
     clip = _content_bbox(page)
+
+    # 찾은 부분만 크게 보기 — 형광펜 위아래로 조금 여유를 두고 잘라냄
+    if focus and rects:
+        clip = _focus_bbox(page, rects, clip)
 
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
     img_bytes = pix.tobytes("png")
     doc.close()
     return img_bytes
+
+
+def _focus_bbox(page, rects, content_clip):
+    """
+    형광펜 영역을 감싸는 잘라내기 상자.
+    좌우는 본문 전체 폭을 그대로 두고(문장이 잘리지 않게),
+    위아래로만 앞뒤 몇 줄이 보이도록 여유를 줍니다.
+    """
+    top = min(r.y0 for r in rects)
+    bottom = max(r.y1 for r in rects)
+
+    pad = 46  # 위아래 여유(포인트) — 앞뒤 두어 줄이 함께 보이는 정도
+    base = content_clip if content_clip is not None else page.rect
+    box = fitz.Rect(base.x0, top - pad, base.x1, bottom + pad)
+
+    # 너무 납작하면(한 줄만 칠해진 경우) 최소 높이를 확보
+    min_height = 150
+    if box.height < min_height:
+        center = (box.y0 + box.y1) / 2
+        box = fitz.Rect(box.x0, center - min_height / 2, box.x1, center + min_height / 2)
+
+    box &= base  # 본문 영역 밖으로 나가지 않게
+    if box.is_empty or box.is_infinite:
+        return content_clip
+    return box
 
 
 def _highlight(page, text: str):
@@ -53,7 +84,7 @@ def _highlight(page, text: str):
         except Exception:
             return []
 
-    found = False
+    painted = []  # 실제로 칠한 영역들 (찾은 부분만 크게 보기에 사용)
 
     # 1) 줄 단위로 각각 찾아서 칠하기
     for line in text.splitlines():
@@ -65,16 +96,19 @@ def _highlight(page, text: str):
             rects = search(line[:30])  # 줄이 길면 앞부분만이라도
         for rect in rects:
             page.add_highlight_annot(rect)
-            found = True
+            painted.append(rect)
 
     # 2) 한 줄도 못 찾았으면 앞부분 조각으로 재시도
-    if not found:
+    if not painted:
         for snippet in _make_snippets(text):
             rects = search(snippet)
             for rect in rects:
                 page.add_highlight_annot(rect)
+                painted.append(rect)
             if rects:
                 break
+
+    return painted
 
 
 def _content_bbox(page):
