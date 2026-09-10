@@ -514,7 +514,10 @@ def render_results(contract):
     )
     st.info(
         "**보는 방법** — 항목마다 계약서에 적힌 내용과 **몇 페이지**인지가 나오고, "
-        "그 아래 원본 페이지 사진에 해당 문장이 **노랗게** 칠해져 있습니다. "
+        "그 아래 원본 페이지 사진에 해당 문장이 **노랗게** 칠해져 있습니다.\n\n"
+        "🔍 **글씨가 작아 안 읽히면** — 사진 위에 마우스를 올리면 오른쪽 위에 **↕ 확대 아이콘**이 "
+        "나타납니다. 누르면 화면 가득 크게 볼 수 있습니다. (원본 PDF를 그 페이지에서 직접 보는 것이 "
+        "가장 정확합니다)\n\n"
         "직접 눈으로 확인한 항목은 오른쪽 네모에 체크해 두면 어디까지 봤는지 알 수 있습니다. "
         "'찾지 못했습니다' 라고 나오면 그 항목은 이 계약서에 없거나 표현이 많이 달라 못 찾은 것이니, "
         "중요한 항목이면 원본을 한 번 더 확인하세요."
@@ -522,12 +525,12 @@ def render_results(contract):
     opt1, opt2, opt3 = st.columns([0.34, 0.45, 0.21])
     show_image = opt1.checkbox("원본 페이지 이미지(형광펜) 함께 보기", value=True)
     focus_mode = opt1.checkbox(
-        "찾은 부분만 잘라서 크게 보기", value=True,
-        help="형광펜 친 곳 둘레만 잘라 보여줍니다. 체크를 빼면 페이지 전체가 나옵니다.",
+        "찾은 부분만 잘라서 보기", value=False,
+        help="형광펜 친 곳 둘레만 잘라서 보여줍니다. 앞뒤 맥락이 필요하면 체크하지 마세요(기본).",
     )
     opt2.radio(
         "기본 이미지 크기", list(IMAGE_WIDTHS), key="img_size",
-        index=list(IMAGE_WIDTHS).index("크게"),  # 잘라서 보여주므로 크게가 기본
+        index=list(IMAGE_WIDTHS).index("꽉 채우기"),  # 페이지 전체를 보여주므로 크게가 기본
         horizontal=True, label_visibility="collapsed",
     )
     apply_all = opt3.button("모든 이미지에 적용", use_container_width=True,
