@@ -611,6 +611,8 @@ def render_results(contract):
 
                 if judge_line:
                     st.markdown(judge_line)
+                if item.get("쟁점"):
+                    st.caption(f"🔍 확인한 쟁점: {item['쟁점']}")
                 st.write(item.get("내용", ""))
                 if item.get("원문"):
                     st.caption(f"원문: {item['원문']}")
