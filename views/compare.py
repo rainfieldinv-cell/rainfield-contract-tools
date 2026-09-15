@@ -154,8 +154,11 @@ def render_document_section(label: str, session_key: str, upload_hint: str):
     avg_chars = total_chars / total_pages if total_pages else 0
     if avg_chars < 20:
         st.warning(
-            "텍스트가 거의 추출되지 않았습니다. **스캔(사진)으로 만들어진 PDF**로 보입니다. "
-            "아래 버튼을 누르면 클로드가 페이지 사진을 읽어 글자로 바꿉니다(OCR). "
+            "글자가 거의 없습니다. **스캔(사진)으로 만들어진 PDF**로 보입니다.\n\n"
+            "**👉 워드 원본이 있다면, 워드에서 `F12` → PDF로 저장한 뒤 그 PDF를 올려주세요.** "
+            "(맨 위 📎 안내 참고) 그게 가장 정확하고, 형광펜도 칠해집니다.\n\n"
+            "워드 원본이 없다면 아래 버튼으로 클로드가 페이지 사진을 읽어 글자로 바꿀 수 있습니다(OCR). "
+            f"단 OCR로 읽은 경우 **형광펜은 칠해지지 않고** 페이지 사진만 나옵니다. "
             f"({total_pages}페이지 처리에 몇 분, 소액 과금이 있을 수 있어요.)"
         )
 
