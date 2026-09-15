@@ -558,6 +558,13 @@ def render_results(contract):
         ".chkbar{height:9px; background:#e6e8ef; border-radius:5px;"
         "margin-top:7px; overflow:hidden;}"
         ".chkbar>span{display:block; height:100%; background:#1A2B5E;}"
+        # 키워드 제목 띠 — 스크롤해도 위에 붙어서 '지금 무슨 키워드인지' 계속 보임
+        ".kwbar{position:sticky; top:0; z-index:500; background:#1A2B5E; color:#fff;"
+        "padding:10px 14px; border-radius:8px; margin:26px 0 10px;"
+        "box-shadow:0 2px 6px rgba(0,0,0,.15);}"
+        ".kwbar .n{opacity:.75; font-size:12px; letter-spacing:.5px;}"
+        ".kwbar .t{font-size:17px; font-weight:700; margin-top:2px; line-height:1.4;}"
+        ".kwbar .c{font-size:12px; opacity:.9; margin-top:5px;}"
         # 원본 페이지 이미지에 검정 테두리
         '[data-testid="stImage"] img{border:1px solid #111; border-radius:2px;}'
         "</style>",
@@ -572,8 +579,28 @@ def render_results(contract):
 
     checked_cards = []  # 체크된 카드는 초록색으로 칠하기 위해 모아둠
 
-    for kw, items in results.items():
-        st.subheader(f"🔎 {kw}  ({len(items)}건)")
+    for kw_no, (kw, items) in enumerate(results.items(), 1):
+        # ── 키워드 제목 띠 (이 아래 나오는 카드들은 전부 이 키워드의 결과) ──
+        badge_count = {"해당": 0, "해당 아님": 0, "조항 없음": 0, "확인 필요": 0}
+        for it in items:
+            if it.get("판단") in badge_count:
+                badge_count[it["판단"]] += 1
+        summary = "  ·  ".join(
+            f"{mark} {name} {badge_count[name]}건"
+            for mark, name in (("🔴", "해당"), ("🟡", "확인 필요"),
+                               ("🟠", "조항 없음"), ("🟢", "해당 아님"))
+            if badge_count[name]
+        ) or "찾은 내용 없음"
+
+        st.markdown(
+            f'<div class="kwbar">'
+            f'<div class="n">검토 항목 {kw_no} / {len(results)}</div>'
+            f'<div class="t">🔎 {kw}</div>'
+            f'<div class="c">{len(items)}건 &nbsp;|&nbsp; {summary}</div>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
         if not items:
             st.caption("이 계약서에서 관련 내용을 찾지 못했습니다.")
             continue
@@ -583,12 +610,13 @@ def render_results(contract):
             page_label = f"{page}페이지" if page else "페이지 미상"
             judgment = item.get("판단", "")
             # 판단은 '조항'이 아니라 '검토 항목(위험 신호)'에 대한 것이라 문장으로 적어줍니다.
+            # 위 제목 띠가 어떤 키워드인지 알려주므로, 여기선 판단만 짧게 적습니다.
             judge_line = {
-                "해당": f"🔴 검토 항목 「{kw}」 → **이 위험에 해당합니다**",
-                "해당 아님": f"🟢 검토 항목 「{kw}」 → 위험 없음 (해당하지 않음)",
-                "조항 없음": f"🟠 검토 항목 「{kw}」 → **관련 조항이 계약서에 없습니다**",
-                "확인 필요": f"🟡 검토 항목 「{kw}」 → 문구가 모호해 사람이 확인해야 합니다",
-            }.get(judgment, f"「{kw}」 → {judgment}" if judgment else "")
+                "해당": "🔴 **이 위험에 해당합니다**",
+                "해당 아님": "🟢 위험 없음 (이 항목에 해당하지 않음)",
+                "조항 없음": "🟠 **관련 조항이 계약서에 없습니다**",
+                "확인 필요": "🟡 문구가 모호해 사람이 직접 확인해야 합니다",
+            }.get(judgment, judgment)
 
             chk_key = f"chk_{kw}_{idx}"
             card_key = f"card_{abs(hash((kw, idx)))}"
