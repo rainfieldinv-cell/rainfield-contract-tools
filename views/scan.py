@@ -38,6 +38,11 @@ COMMON_COLUMN = "공통"
 # 결과 화면의 원본 이미지 크기(가로 픽셀). None 이면 화면 폭에 꽉 채움.
 IMAGE_WIDTHS = {"작게": 420, "보통": 650, "크게": 900, "꽉 채우기": None}
 
+# 고른 계약서 종류를 담아두는 자리.
+# 주의: 드롭다운 자체의 키("contract_type")는 그 화면을 벗어나면 스트림릿이 지워버립니다.
+#       그래서 고른 값을 여기에 따로 복사해 두고, 다른 단계에서는 이 값을 씁니다.
+CHOSEN_TYPE = "sc_chosen_type"
+
 
 # ─────────────────────────────────────────────
 # 공통 도우미
@@ -73,7 +78,8 @@ def cached_page_image(pdf_path: str, page: int, highlight: str,
 
 def reset_all():
     """초기화: 올린 계약서와 찾은 결과를 모두 지웁니다."""
-    for k in ["sc_contract", "scan_results", "scan_meta", "uploader_sc_contract"]:
+    for k in ["sc_contract", "scan_results", "scan_meta", "uploader_sc_contract",
+              CHOSEN_TYPE]:
         st.session_state.pop(k, None)
     st.session_state["step"] = STEPS[0]
 
@@ -221,14 +227,21 @@ def render_step1():
         "그다음 그 계약서 파일을 올리면 됩니다."
     )
 
+    # 지난번에 고른 종류가 있으면 그대로 다시 보여줍니다.
+    saved = st.session_state.get(CHOSEN_TYPE)
+    start = selectable_types.index(saved) if saved in selectable_types else 0
+
     st.selectbox(
         "어떤 계약서를 볼 건가요?",
         selectable_types,
+        index=start,
         key="contract_type",
         help="구글 시트 맨 윗줄에 적어둔 계약서 이름들입니다. 시트에 추가하고 🔄 시트 새로고침을 누르면 여기에도 늘어납니다.",
     )
 
-    contract_type = st.session_state["contract_type"]
+    # 고른 값을 따로 보관 (다음 단계로 넘어가도 잊지 않도록)
+    st.session_state[CHOSEN_TYPE] = st.session_state["contract_type"]
+    contract_type = st.session_state[CHOSEN_TYPE]
     n_kw = len(sheet_data["by_contract"].get(contract_type, []))
     n_common = len(common_items)
     if n_kw or n_common:
@@ -389,7 +402,8 @@ def _render_extra_items(contract_type: str) -> list:
 
 
 def render_step2():
-    contract_type = st.session_state.get("contract_type", contract_types[0])
+    # 1단계에서 고른 종류(드롭다운 키가 아니라 따로 보관해 둔 값)를 씁니다.
+    contract_type = st.session_state.get(CHOSEN_TYPE, selectable_types[0])
     contract = st.session_state.get("sc_contract")
 
     st.header(f"찾을 항목 고르기 — {contract_type}")
