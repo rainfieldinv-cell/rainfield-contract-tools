@@ -98,6 +98,18 @@ def set_all_keywords(contract_type: str, keywords: list, value: bool):
     """전체 선택 / 전체 해제 버튼."""
     for k in keywords:
         st.session_state[kw_key(contract_type, k)] = value
+    st.session_state[picked_key(contract_type)] = list(keywords) if value else []
+
+
+def picked_key(contract_type: str) -> str:
+    """고른 항목 목록을 따로 보관하는 자리(체크박스도 화면을 벗어나면 지워지므로)."""
+    return f"picked::{contract_type}"
+
+
+def default_checked(contract_type: str, keyword: str) -> bool:
+    """전에 고른 기록이 있으면 그대로, 없으면 처음이니 체크된 상태로."""
+    saved = st.session_state.get(picked_key(contract_type))
+    return True if saved is None else (keyword in saved)
 
 
 # ─────────────────────────────────────────────
@@ -390,7 +402,7 @@ def _render_extra_items(contract_type: str) -> list:
                 chk_col, del_col = st.columns([0.9, 0.1])
                 with chk_col:
                     key = kw_key(contract_type, text)
-                    st.session_state.setdefault(key, True)
+                    st.session_state.setdefault(key, default_checked(contract_type, text))
                     st.checkbox(text, key=key)
                 if del_col.button("🗑", key=f"extra_del::{contract_type}::{i}",
                                   help="이 항목 지우기"):
@@ -448,7 +460,7 @@ def render_step2():
             for i, kw in enumerate(items):
                 with cols[i % 2]:
                     key = kw_key(contract_type, kw)
-                    st.session_state.setdefault(key, True)
+                    st.session_state.setdefault(key, default_checked(contract_type, kw))
                     st.checkbox(kw, key=key)
 
     _checkbox_block(f"📌 {contract_type} 항목 ({len(own)}개)", own)
@@ -461,6 +473,8 @@ def render_step2():
     extras = _render_extra_items(contract_type)
 
     selected = [k for k in all_keywords if st.session_state.get(kw_key(contract_type, k))]
+    # 고른 결과를 따로 보관 — 단계를 오가도 선택이 그대로 남도록
+    st.session_state[picked_key(contract_type)] = selected
     st.caption(
         f"선택한 항목: **{len(selected)}개** / 전체 {len(all_keywords)}개 "
         f"({contract_type} {len(own)}개 + {COMMON_COLUMN} {len(common)}개"
