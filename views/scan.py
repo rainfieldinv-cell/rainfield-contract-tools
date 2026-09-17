@@ -21,7 +21,7 @@ from utils.guide import render_upload_guide_boxes
 from utils.keywords import load_keywords
 from utils.loader import process_uploaded_documents
 from utils.ocr import ocr_pdf_pages
-from utils.render import render_page_image, render_pages_row
+from utils.render import render_page_image
 from utils.scan import scan_contract
 
 # 구글 시트(검토 키워드) 기본 주소 — secrets 의 keyword_sheet_url 로 덮어쓸 수 있음
@@ -76,14 +76,6 @@ def cached_page_image(pdf_path: str, page: int, highlight: str,
     return render_page_image(pdf_path, page, highlight_text=highlight, focus=focus)
 
 
-@st.cache_data(show_spinner=False)
-def cached_pages_row(pdf_path: str, pages: tuple, highlight_page: int,
-                     highlight: str) -> bytes:
-    """여러 페이지를 가로로 이어 붙인 그림 (한 번 눌러 3페이지를 함께 보기)."""
-    return render_pages_row(
-        pdf_path, list(pages),
-        highlight_page=highlight_page, highlight_text=highlight,
-    )
 
 
 def reset_all():
@@ -572,8 +564,9 @@ def render_results(contract):
         "그 아래 원본 페이지 사진에 해당 문장이 **노랗게** 칠해져 있습니다.\n\n"
         "🔍 **글씨가 작아 안 읽히면** — 사진 위에 마우스를 올리면 오른쪽 위에 **↕ 확대 아이콘**이 "
         "나타납니다. 누르면 화면 가득 크게 볼 수 있습니다.\n\n"
-        "◀▶ **앞뒤 내용까지 보려면** — 펼친 안에 있는 **이전·다음 페이지도 함께 보기** 를 체크하면 "
-        "앞 페이지 → 해당 페이지 → 뒤 페이지 순서로 3장이 나옵니다.\n\n"
+        "◀▶ **앞뒤 내용까지 보려면** — 펼친 안의 **이전·다음 페이지도 함께 보기** 를 체크하면 "
+        "앞 페이지 · 해당 페이지 · 뒤 페이지가 **나란히** 나옵니다(각각 눌러서 크게 볼 수 있음). "
+        "체크하지 않으면 한 장만 나오고, 아래 **◀ 이전 / 다음 ▶** 버튼으로 넘겨볼 수 있습니다.\n\n"
         "직접 눈으로 확인한 항목은 오른쪽 네모에 체크해 두면 어디까지 봤는지 알 수 있습니다. "
         "'찾지 못했습니다' 라고 나오면 그 항목은 이 계약서에 없거나 표현이 많이 달라 못 찾은 것이니, "
         "중요한 항목이면 원본을 한 번 더 확인하세요."
@@ -613,6 +606,8 @@ def render_results(contract):
         ".kwbar .n{opacity:.75; font-size:12px; letter-spacing:.5px;}"
         ".kwbar .t{font-size:17px; font-weight:700; margin-top:2px; line-height:1.4;}"
         ".kwbar .c{font-size:12px; opacity:.9; margin-top:5px;}"
+        # 앞뒤 페이지를 나란히 볼 때 이미지끼리 너무 붙지 않게 좌우 여백
+        '[data-testid="stHorizontalBlock"] [data-testid="stImage"]{padding:0 14px;}'
         # 원본 페이지 이미지에 검정 테두리
         '[data-testid="stImage"] img{border:1px solid #111; border-radius:2px;}'
         "</style>",
@@ -720,16 +715,22 @@ def render_results(contract):
                             around = [p for p in (page - 1, page, page + 1)
                                       if 1 <= p <= last_page]
                             st.caption(
-                                "📄 " + " · ".join(
-                                    f"{p}페이지{' ← 찾은 곳' if p == page else ''}"
-                                    for p in around
-                                )
-                                + "  — 이미지를 누르면 3페이지가 함께 크게 열립니다."
+                                f"📄 앞뒤 페이지 함께 보기 — 가운데가 찾은 곳({page}페이지)입니다. "
+                                "각 이미지를 누르면 그 페이지만 크게 열립니다."
                             )
-                            img = cached_pages_row(
-                                contract["pdf_path"], tuple(around), page, highlight,
-                            )
-                            st.image(img, use_container_width=True)
+                            cols = st.columns(len(around), gap="large")
+                            for col, p in zip(cols, around):
+                                with col:
+                                    st.markdown(
+                                        f"**{p}페이지**"
+                                        + ("  ← 찾은 곳" if p == page else "")
+                                    )
+                                    img = cached_page_image(
+                                        contract["pdf_path"], p,
+                                        highlight if p == page else "",
+                                        focus_mode if p == page else False,
+                                    )
+                                    st.image(img, use_container_width=True)
                         else:
                             now = min(max(st.session_state[view_key], 1), last_page)
                             st.caption(
