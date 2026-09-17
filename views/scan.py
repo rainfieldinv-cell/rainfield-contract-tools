@@ -103,6 +103,13 @@ def set_all_keywords(contract_type: str, keywords: list, value: bool):
     st.session_state[picked_key(contract_type)] = list(keywords) if value else []
 
 
+def keep_open_setter(open_key: str):
+    """펼침 상태를 '열림'으로 기억하는 콜백을 만들어 줍니다."""
+    def _keep():
+        st.session_state[open_key] = True
+    return _keep
+
+
 def picked_key(contract_type: str) -> str:
     """고른 항목 목록을 따로 보관하는 자리(체크박스도 화면을 벗어나면 지워지므로)."""
     return f"picked::{contract_type}"
@@ -520,13 +527,25 @@ def render_step2():
             )
         else:
             progress = st.progress(0.0, text="계약서를 읽는 중...")
+
+            def show_progress(d, t, secs, waiting=False):
+                """진행 표시 — 기다리는 동안에도 1초마다 갱신됩니다."""
+                mm, ss = divmod(secs, 60)
+                clock = f"{mm}분 {ss}초" if mm else f"{ss}초"
+                if waiting:
+                    text = (f"찾는 중... {d}/{t} 묶음 완료 · 지금 {d + 1}번째 묶음 처리 중"
+                            f" · {clock} 경과")
+                    ratio = min((d + 0.5) / t, 0.99)
+                else:
+                    text = f"찾는 중... {d}/{t} 묶음 완료 · {clock} 경과"
+                    ratio = d / t
+                progress.progress(ratio, text=text)
+
             try:
                 found, notes = scan_contract(
                     contract["pages"], selected, api_key,
                     contract_type=contract_type,
-                    progress_callback=lambda d, t: progress.progress(
-                        d / t, text=f"찾는 중... {d}/{t} 묶음"
-                    ),
+                    progress_callback=show_progress,
                 )
                 st.session_state["scan_results"] = found
                 st.session_state["scan_notes"] = notes
@@ -686,11 +705,17 @@ def render_results(contract):
                 f"{item.get('항목') or '(항목 이름 없음)'}  ·  📄 {page_label}"
             )
 
+            # 펼친 상태를 기억해 둡니다.
+            # (스트림릿은 화면을 다시 그릴 때 펼침 상태를 잊어버려서, 안의 버튼을 누르면
+            #  접혀버립니다. 그래서 안에서 무엇이든 누르면 '열림'으로 기억해 둡니다)
+            open_key = f"open_{kw}_{idx}"
+            keep_open = keep_open_setter(open_key)
+
             # 제목만 보이고, 누르면 내용·원문·이미지가 열립니다(화면을 덜 차지).
-            with st.expander(title):
+            with st.expander(title, expanded=st.session_state.get(open_key, False)):
                 chk, _sp = st.columns([0.35, 0.65])
                 chk.checkbox(
-                    "확인함", key=chk_key,
+                    "확인함", key=chk_key, on_change=keep_open,
                     help="직접 눈으로 확인했으면 체크하세요.",
                 )
                 if judge_line:
@@ -705,7 +730,8 @@ def render_results(contract):
                     last_page = len(contract.get("pages") or []) or page
                     show_around = st.checkbox(
                         "◀▶ 이전·다음 페이지도 함께 보기", key=f"around_{kw}_{idx}",
-                        help="앞뒤 맥락을 보려면 체크하세요. 이전 페이지 → 해당 페이지 → 다음 페이지 순서로 나옵니다.",
+                        on_change=keep_open,
+                        help="앞뒤 맥락을 보려면 체크하세요. 이전 페이지 · 해당 페이지 · 다음 페이지가 나란히 나옵니다.",
                     )
                     highlight = item.get("원문") or item.get("내용", "")
                     view_key = f"pageview_{kw}_{idx}"   # 지금 보고 있는 페이지
@@ -751,17 +777,20 @@ def render_results(contract):
                             b1.button(
                                 "◀ 이전", key=f"prev_{kw}_{idx}",
                                 disabled=now <= 1, use_container_width=True,
-                                on_click=lambda k=view_key, n=now: st.session_state.update({k: n - 1}),
+                                on_click=lambda k=view_key, o=open_key, n=now:
+                                    st.session_state.update({k: n - 1, o: True}),
                             )
                             b2.button(
                                 "다음 ▶", key=f"next_{kw}_{idx}",
                                 disabled=now >= last_page, use_container_width=True,
-                                on_click=lambda k=view_key, n=now: st.session_state.update({k: n + 1}),
+                                on_click=lambda k=view_key, o=open_key, n=now:
+                                    st.session_state.update({k: n + 1, o: True}),
                             )
                             b3.button(
                                 "↺ 찾은 곳으로", key=f"back_{kw}_{idx}",
                                 disabled=now == page, use_container_width=True,
-                                on_click=lambda k=view_key, n=page: st.session_state.update({k: n}),
+                                on_click=lambda k=view_key, o=open_key, n=page:
+                                    st.session_state.update({k: n, o: True}),
                             )
                     except Exception as e:
                         st.caption(f"이미지를 만들지 못했습니다: {e}")

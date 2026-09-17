@@ -9,7 +9,7 @@
 """
 
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import List, Optional
 
 import anthropic
@@ -24,8 +24,11 @@ KEYWORDS_PER_CALL = 4
 # 한 번에 받을 수 있는 답의 최대 길이. 스트리밍으로 받으므로 넉넉히 둡니다.
 MAX_TOKENS = 32000
 
-# 동시에 보낼 요청 수. 너무 높이면 API가 '너무 빠르다'며 거절(429)합니다.
-MAX_PARALLEL = 3
+# 요청은 '한 번에 하나씩' 보냅니다(순차).
+#   · 동시에 보내면 30% 정도 빨라지지만, API가 '너무 빠르다'며 거절(429)할 위험이 생기고
+#     계약서 본문 캐시 할인도 놓칩니다. 안전이 우선이라 순차로 둡니다.
+#   · 기다리는 동안 진행 표시는 1초마다 갱신되므로 멈춘 것처럼 보이지는 않습니다.
+MAX_PARALLEL = 1
 
 # 거절(429)당했을 때 잠깐 쉬고 다시 시도하는 횟수·간격(초)
 RETRY_ON_LIMIT = 3
@@ -162,7 +165,9 @@ def scan_contract(pages: list, keywords: list, api_key: str,
     pages       : [{"page":1,"text":"..."}, ...]  (계약서 본문)
     keywords    : 사용자가 고른 키워드 목록 (시트에 적힌 순서 그대로)
     contract_type : 계약서 종류 이름 (예: 대출약정서) — 안내용
-    progress_callback(done, total) : 진행 상황 알림(선택)
+    progress_callback(done, total, seconds, waiting) : 진행 상황 알림(선택)
+        done/total = 끝낸 묶음 / 전체 묶음, seconds = 시작 후 경과 초,
+        waiting=True 는 아직 기다리는 중(1초마다 호출)
 
     반환값 : (찾은 내용, 항목별 코멘트)
         찾은 내용   = {키워드: [{"항목","내용","원문","페이지","판단","쟁점"}, ...]}
@@ -179,61 +184,49 @@ def scan_contract(pages: list, keywords: list, api_key: str,
     document_text = _build_page_marked_text(pages)
     label = contract_type or "계약서"
 
-    batches = list(_chunks(keywords, KEYWORDS_PER_CALL))
-    done, total = 0, len(batches)
+    queue = list(_chunks(keywords, KEYWORDS_PER_CALL))
+    done, total = 0, len(queue)
     last_error = None
+    started = time.time()
 
     def take(batch, parsed):
         _collect(parsed.findings, batch, result)
         _collect_notes(getattr(parsed, "notes", None) or [], batch, result, notes)
 
-    def report():
+    def report(waiting: bool = False):
+        """진행 상황 알림. waiting=True 면 '지금 기다리는 중' 이라는 뜻."""
         if progress_callback:
-            progress_callback(done, max(total, done))
+            progress_callback(done, max(total, done), int(time.time() - started),
+                              waiting)
 
-    # ── 1단계: 첫 묶음만 먼저 (계약서 본문을 캐시에 올려 두 번째부터 싸고 빠르게) ──
-    failed = []
-    first = batches[0]
-    try:
-        take(first, _ask_claude(client, document_text, label, first))
-    except Exception as e:
-        last_error = e
-        failed.append(first)
-    done += 1
-    report()
+    # 한 번에 하나씩(순차) 보냅니다. 기다리는 동안 1초마다 진행 표시만 갱신합니다.
+    # (작업 자체는 일꾼 한 명에게 맡겨두고, 본 화면은 시간을 세면서 기다립니다)
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as pool:
+        while queue:
+            batch = queue.pop(0)
+            job = pool.submit(_ask_claude, client, document_text, label, batch)
 
-    # ── 2단계: 남은 묶음은 동시에 보냄 (캐시가 이미 있으므로 저렴·빠름) ──
-    rest = batches[1:]
-    if rest:
-        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as pool:
-            jobs = {pool.submit(_ask_claude, client, document_text, label, b): b
-                    for b in rest}
-            for job in as_completed(jobs):
-                batch = jobs[job]
-                try:
-                    take(batch, job.result())
-                except Exception as e:
-                    last_error = e
-                    failed.append(batch)
-                done += 1
-                report()
+            while True:
+                finished, _ = wait([job], timeout=1.0, return_when=FIRST_COMPLETED)
+                if finished:
+                    break
+                report(waiting=True)  # 아직 기다리는 중 — 경과 시간만 갱신
 
-    # ── 3단계: 실패한 묶음은 반으로 쪼개 하나씩 다시 (답이 잘린 경우 대비) ──
-    queue = list(failed)
-    while queue:
-        batch = queue.pop(0)
-        if len(batch) > 1:
-            half = len(batch) // 2
-            queue.insert(0, batch[half:])
-            queue.insert(0, batch[:half])
-            total += 1
-            continue
-        try:
-            take(batch, _ask_claude(client, document_text, label, batch))
-        except Exception as e:
-            last_error = e  # 항목 한 개인데도 실패 → 그 항목만 비워 두고 계속
-        done += 1
-        report()
+            try:
+                take(batch, job.result())
+            except Exception as e:
+                last_error = e
+                if len(batch) > 1:
+                    # 답이 잘렸을 수 있으니 반으로 쪼개 다시 시도
+                    half = len(batch) // 2
+                    queue.insert(0, batch[half:])
+                    queue.insert(0, batch[:half])
+                    total += 1
+                    continue
+                # 항목 한 개인데도 실패하면 그 항목만 비워 두고 계속 진행
+
+            done += 1
+            report()
 
     # 한 항목도 못 받았으면 원인을 알려줍니다(전부 실패한 경우만)
     if last_error is not None and not any(result.values()) and not notes:
