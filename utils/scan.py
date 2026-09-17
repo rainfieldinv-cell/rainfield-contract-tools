@@ -8,6 +8,8 @@
   이때 계약서 본문은 매번 같으므로 '프롬프트 캐시'를 걸어 비용을 아낍니다.
 """
 
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
 import anthropic
@@ -21,6 +23,13 @@ KEYWORDS_PER_CALL = 4
 
 # 한 번에 받을 수 있는 답의 최대 길이. 스트리밍으로 받으므로 넉넉히 둡니다.
 MAX_TOKENS = 32000
+
+# 동시에 보낼 요청 수. 너무 높이면 API가 '너무 빠르다'며 거절(429)합니다.
+MAX_PARALLEL = 3
+
+# 거절(429)당했을 때 잠깐 쉬고 다시 시도하는 횟수·간격(초)
+RETRY_ON_LIMIT = 3
+RETRY_WAIT = 8
 
 
 class ScanFinding(BaseModel):
@@ -170,35 +179,61 @@ def scan_contract(pages: list, keywords: list, api_key: str,
     document_text = _build_page_marked_text(pages)
     label = contract_type or "계약서"
 
-    # 묶음 단위로 물어봅니다. 답이 잘려서 실패하면 그 묶음을 반으로 쪼개 다시 시도합니다.
-    queue = list(_chunks(keywords, KEYWORDS_PER_CALL))
-    done, total = 0, len(queue)
+    batches = list(_chunks(keywords, KEYWORDS_PER_CALL))
+    done, total = 0, len(batches)
     last_error = None
 
-    while queue:
-        batch = queue.pop(0)
-        try:
-            parsed = _ask_claude(client, document_text, label, batch)
-        except Exception as e:  # 답이 잘림·일시적 오류 → 쪼개서 재시도
-            last_error = e
-            if len(batch) > 1:
-                half = len(batch) // 2
-                queue.insert(0, batch[half:])
-                queue.insert(0, batch[:half])
-                total += 1
-                continue
-            # 항목 한 개인데도 실패하면 그 항목만 비워 두고 계속 진행
-            done += 1
-            if progress_callback:
-                progress_callback(done, max(total, done))
-            continue
-
+    def take(batch, parsed):
         _collect(parsed.findings, batch, result)
         _collect_notes(getattr(parsed, "notes", None) or [], batch, result, notes)
 
-        done += 1
+    def report():
         if progress_callback:
             progress_callback(done, max(total, done))
+
+    # ── 1단계: 첫 묶음만 먼저 (계약서 본문을 캐시에 올려 두 번째부터 싸고 빠르게) ──
+    failed = []
+    first = batches[0]
+    try:
+        take(first, _ask_claude(client, document_text, label, first))
+    except Exception as e:
+        last_error = e
+        failed.append(first)
+    done += 1
+    report()
+
+    # ── 2단계: 남은 묶음은 동시에 보냄 (캐시가 이미 있으므로 저렴·빠름) ──
+    rest = batches[1:]
+    if rest:
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as pool:
+            jobs = {pool.submit(_ask_claude, client, document_text, label, b): b
+                    for b in rest}
+            for job in as_completed(jobs):
+                batch = jobs[job]
+                try:
+                    take(batch, job.result())
+                except Exception as e:
+                    last_error = e
+                    failed.append(batch)
+                done += 1
+                report()
+
+    # ── 3단계: 실패한 묶음은 반으로 쪼개 하나씩 다시 (답이 잘린 경우 대비) ──
+    queue = list(failed)
+    while queue:
+        batch = queue.pop(0)
+        if len(batch) > 1:
+            half = len(batch) // 2
+            queue.insert(0, batch[half:])
+            queue.insert(0, batch[:half])
+            total += 1
+            continue
+        try:
+            take(batch, _ask_claude(client, document_text, label, batch))
+        except Exception as e:
+            last_error = e  # 항목 한 개인데도 실패 → 그 항목만 비워 두고 계속
+        done += 1
+        report()
 
     # 한 항목도 못 받았으면 원인을 알려줍니다(전부 실패한 경우만)
     if last_error is not None and not any(result.values()) and not notes:
@@ -208,7 +243,26 @@ def scan_contract(pages: list, keywords: list, api_key: str,
 
 
 def _ask_claude(client, document_text: str, label: str, batch: list):
-    """묶음 하나를 클로드에게 물어봅니다. (스트리밍 — 긴 답도 잘리지 않게)"""
+    """
+    묶음 하나를 클로드에게 물어봅니다. (스트리밍 — 긴 답도 잘리지 않게)
+    동시에 여러 개 보내다 거절(429)당하면 잠깐 쉬고 다시 시도합니다.
+    """
+    for attempt in range(RETRY_ON_LIMIT):
+        try:
+            return _ask_once(client, document_text, label, batch)
+        except anthropic.RateLimitError:
+            if attempt == RETRY_ON_LIMIT - 1:
+                raise
+            time.sleep(RETRY_WAIT * (attempt + 1))
+        except anthropic.APIStatusError as e:
+            # 서버 쪽 일시적 오류(5xx)면 한 번 더 시도
+            if getattr(e, "status_code", 0) < 500 or attempt == RETRY_ON_LIMIT - 1:
+                raise
+            time.sleep(RETRY_WAIT)
+
+
+def _ask_once(client, document_text: str, label: str, batch: list):
+    """실제 호출 한 번."""
     numbered = "\n".join(f"- {k}" for k in batch)
     instruction = (
         f"위 문서는 '{label}' 입니다.\n"
