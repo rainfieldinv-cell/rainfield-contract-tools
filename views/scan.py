@@ -506,13 +506,15 @@ def render_step2():
         else:
             progress = st.progress(0.0, text="계약서를 읽는 중...")
             try:
-                st.session_state["scan_results"] = scan_contract(
+                found, notes = scan_contract(
                     contract["pages"], selected, api_key,
                     contract_type=contract_type,
                     progress_callback=lambda d, t: progress.progress(
                         d / t, text=f"찾는 중... {d}/{t} 묶음"
                     ),
                 )
+                st.session_state["scan_results"] = found
+                st.session_state["scan_notes"] = notes
                 st.session_state["scan_meta"] = {
                     "계약서종류": contract_type,
                     "파일": contract["name"],
@@ -531,6 +533,7 @@ def render_results(contract):
     if not results:
         return
 
+    notes = st.session_state.get("scan_notes", {})
     meta = st.session_state.get("scan_meta", {})
     found_kw = [k for k, v in results.items() if v]
     total_items = sum(len(v) for v in results.values())
@@ -630,9 +633,24 @@ def render_results(contract):
             unsafe_allow_html=True,
         )
 
+        # ── 대주 입장 코멘트 (왜 보는지 / 불리한 점 / 체크할 점 / 이 계약서 상태) ──
+        note = notes.get(kw) or {}
+        if any(note.values()):
+            with st.container(border=True):
+                if note.get("이 계약서 상태"):
+                    st.markdown(f"**📌 이 계약서는** — {note['이 계약서 상태']}")
+                if note.get("왜"):
+                    st.markdown(f"**왜 봐야 하나** — {note['왜']}")
+                if note.get("불리한 점"):
+                    st.markdown(f"**⚠️ 불리하면 뭐가 문제냐** — {note['불리한 점']}")
+                if note.get("체크할 점"):
+                    st.markdown(f"**✅ 체크할 점** — {note['체크할 점']}")
+
         if not items:
             st.caption("이 계약서에서 관련 내용을 찾지 못했습니다.")
             continue
+
+        st.caption(f"↓ 찾은 조항 {len(items)}건 — 제목을 누르면 내용과 원본 이미지가 열립니다.")
 
         for idx, item in enumerate(items):
             page = item.get("페이지")
@@ -648,24 +666,22 @@ def render_results(contract):
             }.get(judgment, judgment)
 
             chk_key = f"chk_{kw}_{idx}"
-            card_key = f"card_{abs(hash((kw, idx)))}"
             is_done = bool(st.session_state.get(chk_key))
-            if is_done:
-                checked_cards.append(card_key)
 
-            with st.container(border=True, key=card_key):
-                # 맨 앞에 체크 → 그 뒤에 제목·페이지 (세로 높이 맞춤)
-                chk, head = st.columns([0.035, 0.965], vertical_alignment="center")
+            mark = {"해당": "🔴", "해당 아님": "🟢",
+                    "조항 없음": "🟠", "확인 필요": "🟡"}.get(judgment, "•")
+            title = (
+                f"{'✅ ' if is_done else ''}{mark} "
+                f"{item.get('항목') or '(항목 이름 없음)'}  ·  📄 {page_label}"
+            )
+
+            # 제목만 보이고, 누르면 내용·원문·이미지가 열립니다(화면을 덜 차지).
+            with st.expander(title):
+                chk, _sp = st.columns([0.35, 0.65])
                 chk.checkbox(
-                    "확인함", key=chk_key, label_visibility="collapsed",
+                    "확인함", key=chk_key,
                     help="직접 눈으로 확인했으면 체크하세요.",
                 )
-                head.markdown(
-                    f"**{item.get('항목') or '(항목 이름 없음)'}**"
-                    f"  ·  📄 {page_label}"
-                    + ("  ·  ✅ **확인함**" if is_done else "")
-                )
-
                 if judge_line:
                     st.markdown(judge_line)
                 if item.get("쟁점"):
@@ -699,7 +715,7 @@ def render_results(contract):
                     except Exception as e:
                         st.caption(f"이미지를 만들지 못했습니다: {e}")
 
-    # 확인한 카드는 연한 초록 배경 + 초록 테두리로 표시
+    # (예전) 확인한 카드 배경색 — 지금은 접이식이라 제목에 ✅ 로 표시합니다.
     if checked_cards:
         rules = ", ".join(f".st-key-{k}" for k in checked_cards)
         st.markdown(

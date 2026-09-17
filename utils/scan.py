@@ -30,8 +30,18 @@ class ScanFinding(BaseModel):
     judgment: str = ""  # "해당" / "해당 아님" / "조항 없음" / "확인 필요"
 
 
+class KeywordNote(BaseModel):
+    """항목 하나에 대한 '대주 입장' 코멘트 (찾은 조항들을 종합한 총평)."""
+    keyword: str  # 어떤 항목에 대한 코멘트인지 (시트 문장 그대로)
+    why: str = ""  # 이 항목을 왜 봐야 하는지
+    risk: str = ""  # 대주에게 불리하게 적혀 있으면 무엇이 문제인지
+    check: str = ""  # 계약서에서 무엇을 확인·요구해야 하는지
+    verdict: str = ""  # 이 계약서의 상태 한 줄 요약
+
+
 class ScanResult(BaseModel):
     findings: List[ScanFinding]
+    notes: List[KeywordNote] = []
 
 
 SCAN_SYSTEM = """당신은 금융 계약서를 검토하는 꼼꼼한 한국어 금융 분석 보조원입니다.
@@ -99,7 +109,16 @@ SCAN_SYSTEM = """당신은 금융 계약서를 검토하는 꼼꼼한 한국어 
     "확인 필요"  : 관련 조항은 있으나 문구가 모호해 사람이 직접 봐야 함
 - **그 주제의 조항이 계약서에 아예 없으면** 그 항목을 빼지 말고, judgment 를 "조항 없음" 으로 하여
   한 건을 만드세요. page 와 quote 는 비우고, content 에 무엇이 없는지 한 줄로 적으세요.
-  (조항이 없다는 사실 자체가 중요한 검토 결과입니다.)"""
+  (조항이 없다는 사실 자체가 중요한 검토 결과입니다.)
+
+━━━ notes (항목별 코멘트) — 항목마다 반드시 하나씩 ━━━
+검토하는 사람은 **대주(대출·투자한 쪽)** 입니다. 항목마다 아래 네 가지를 짧고 실무적으로 적으세요.
+ · why     : 대주가 이 항목을 왜 봐야 하는지 (1~2문장)
+ · risk    : 이 부분이 불리하게 적혀 있으면 대주에게 무슨 손해·위험이 생기는지
+ · check   : 계약서에서 구체적으로 무엇을 확인하고, 없으면 무엇을 요구해야 하는지
+ · verdict : **이 계약서의 실제 상태**를 한 줄로 (예: "인출 순서는 있으나 원리금이 3순위로 밀려 있음")
+일반론만 쓰지 말고, 위에서 찾은 조항 내용을 반영해 이 계약서에 맞게 쓰세요.
+항목 수와 notes 개수는 같아야 합니다."""
 
 
 def _build_page_marked_text(pages: list) -> str:
@@ -126,13 +145,16 @@ def scan_contract(pages: list, keywords: list, api_key: str,
     contract_type : 계약서 종류 이름 (예: 대출약정서) — 안내용
     progress_callback(done, total) : 진행 상황 알림(선택)
 
-    반환값 : {키워드: [{"항목","내용","원문","페이지"}, ...]}
-             찾은 내용이 없는 키워드도 빈 리스트로 반드시 들어갑니다(누락 확인용).
+    반환값 : (찾은 내용, 항목별 코멘트)
+        찾은 내용   = {키워드: [{"항목","내용","원문","페이지","판단","쟁점"}, ...]}
+                      찾은 내용이 없는 키워드도 빈 리스트로 반드시 들어갑니다(누락 확인용).
+        코멘트      = {키워드: {"왜","불리한 점","체크할 점","이 계약서 상태"}}
     """
     keywords = [k.strip() for k in keywords if k and k.strip()]
     result = {k: [] for k in keywords}  # 시트 순서 유지 + 못 찾은 키워드도 남김
+    notes = {}
     if not keywords:
-        return result
+        return result, notes
 
     client = anthropic.Anthropic(api_key=api_key)
     document_text = _build_page_marked_text(pages)
@@ -150,7 +172,9 @@ def scan_contract(pages: list, keywords: list, api_key: str,
             f"각 항목마다 먼저 **쟁점(topic)** 을 한 줄로 정한 뒤, 그 쟁점을 규율하는 조항을 찾으세요. "
             f"항목에 들어간 단어가 포함된 문장을 찾는 방식은 금지입니다.\n"
             f"각 내용을 keyword/topic/item/content/quote/page/judgment 로 정리하세요. "
-            f"keyword 는 위 목록의 문장을 그대로 사용하세요."
+            f"keyword 는 위 목록의 문장을 그대로 사용하세요.\n"
+            f"그리고 notes 에 **항목마다 하나씩** 대주 입장 코멘트"
+            f"(why/risk/check/verdict)를 넣으세요. 위 항목 {len(batch)}개 모두 필요합니다."
         )
 
         response = client.messages.parse(
@@ -172,12 +196,42 @@ def scan_contract(pages: list, keywords: list, api_key: str,
             output_format=ScanResult,
         )
 
-        _collect(response.parsed_output.findings, batch, result)
+        parsed = response.parsed_output
+        _collect(parsed.findings, batch, result)
+        _collect_notes(getattr(parsed, "notes", None) or [], batch, result, notes)
 
         if progress_callback:
             progress_callback(done + 1, len(batches))
 
-    return result
+    return result, notes
+
+
+def _match_keyword(name: str, batch_keywords: list, result: dict):
+    """클로드가 돌려준 키워드 이름을 우리가 보낸 항목과 맞춰줍니다."""
+    def norm(s):
+        return "".join((s or "").split()).lower()
+
+    lookup = {norm(k): k for k in result}
+    key = lookup.get(norm(name))
+    if key is None:
+        for k in batch_keywords:
+            if norm(k) and (norm(k) in norm(name) or norm(name) in norm(k)):
+                return k
+    return key
+
+
+def _collect_notes(note_list: list, batch_keywords: list, result: dict, notes: dict):
+    """항목별 코멘트를 키워드별로 담습니다."""
+    for n in note_list:
+        key = _match_keyword(n.keyword, batch_keywords, result)
+        if key is None:
+            continue
+        notes[key] = {
+            "왜": (n.why or "").strip(),
+            "불리한 점": (n.risk or "").strip(),
+            "체크할 점": (n.check or "").strip(),
+            "이 계약서 상태": (n.verdict or "").strip(),
+        }
 
 
 def _collect(findings: list, batch_keywords: list, result: dict):
