@@ -3,6 +3,8 @@ PyMuPDF(fitz)로 PDF의 특정 페이지를 이미지(PNG)로 만들고,
 가능하면 찾은 내용 부분을 노란색으로 강조하는 기능.
 """
 
+import io
+
 import fitz  # PyMuPDF
 
 
@@ -43,6 +45,61 @@ def render_page_image(
     img_bytes = pix.tobytes("png")
     doc.close()
     return img_bytes
+
+
+def render_pages_row(
+    pdf_path: str,
+    page_numbers: list,
+    highlight_page: int = 0,
+    highlight_text: str = "",
+    zoom: float = 3.0,
+) -> bytes:
+    """
+    여러 페이지를 **가로로 한 장에 이어 붙인** 그림을 만듭니다.
+    (이렇게 하면 이미지를 한 번만 눌러도 3페이지를 함께 크게 볼 수 있습니다)
+
+    page_numbers   : 왼쪽→오른쪽 순서로 그릴 페이지 번호들 (예: [9, 10, 11])
+    highlight_page : 형광펜을 칠할 페이지 (보통 가운데 = 찾은 곳)
+    """
+    from PIL import Image  # 이어 붙일 때만 사용
+
+    images = []
+    for p in page_numbers:
+        raw = render_page_image(
+            pdf_path, p,
+            highlight_text=highlight_text if p == highlight_page else "",
+            zoom=zoom,
+        )
+        images.append((p, Image.open(io.BytesIO(raw)).convert("RGB")))
+
+    if not images:
+        return b""
+    if len(images) == 1:
+        buf = io.BytesIO()
+        images[0][1].save(buf, format="PNG")
+        return buf.getvalue()
+
+    # 높이를 가장 큰 쪽에 맞춰 정렬
+    height = max(im.size[1] for _, im in images)
+    scaled = []
+    for p, im in images:
+        if im.size[1] != height:
+            w = int(im.size[0] * (height / im.size[1]))
+            im = im.resize((w, height), Image.LANCZOS)
+        scaled.append((p, im))
+
+    gap = 24  # 페이지 사이 여백
+    total_w = sum(im.size[0] for _, im in scaled) + gap * (len(scaled) - 1)
+    canvas = Image.new("RGB", (total_w, height), "white")
+
+    x = 0
+    for _p, im in scaled:
+        canvas.paste(im, (x, 0))
+        x += im.size[0] + gap
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _focus_bbox(page, rects, content_clip):

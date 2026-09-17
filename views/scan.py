@@ -21,7 +21,7 @@ from utils.guide import render_upload_guide_boxes
 from utils.keywords import load_keywords
 from utils.loader import process_uploaded_documents
 from utils.ocr import ocr_pdf_pages
-from utils.render import render_page_image
+from utils.render import render_page_image, render_pages_row
 from utils.scan import scan_contract
 
 # 구글 시트(검토 키워드) 기본 주소 — secrets 의 keyword_sheet_url 로 덮어쓸 수 있음
@@ -35,8 +35,8 @@ STEPS = ["① 계약서 올리기", "② 키워드 고르고 찾기"]
 # 시트에서 이 이름의 열은 '모든 계약서에 공통으로 보는 항목'으로 취급합니다.
 COMMON_COLUMN = "공통"
 
-# 결과 화면의 원본 이미지 크기(가로 픽셀). None 이면 화면 폭에 꽉 채움.
-IMAGE_WIDTHS = {"작게": 420, "보통": 650, "크게": 900, "꽉 채우기": None}
+# 결과 화면의 원본 이미지 가로 크기(픽셀). 더 크게 보려면 이미지를 눌러 전체화면으로 봅니다.
+IMAGE_WIDTH = 650
 
 # 고른 계약서 종류를 담아두는 자리.
 # 주의: 드롭다운 자체의 키("contract_type")는 그 화면을 벗어나면 스트림릿이 지워버립니다.
@@ -74,6 +74,16 @@ def cached_page_image(pdf_path: str, page: int, highlight: str,
                       focus: bool = False) -> bytes:
     """같은 페이지·같은 형광펜이면 이미지를 다시 만들지 않습니다."""
     return render_page_image(pdf_path, page, highlight_text=highlight, focus=focus)
+
+
+@st.cache_data(show_spinner=False)
+def cached_pages_row(pdf_path: str, pages: tuple, highlight_page: int,
+                     highlight: str) -> bytes:
+    """여러 페이지를 가로로 이어 붙인 그림 (한 번 눌러 3페이지를 함께 보기)."""
+    return render_pages_row(
+        pdf_path, list(pages),
+        highlight_page=highlight_page, highlight_text=highlight,
+    )
 
 
 def reset_all():
@@ -561,26 +571,19 @@ def render_results(contract):
         "**보는 방법** — 항목마다 계약서에 적힌 내용과 **몇 페이지**인지가 나오고, "
         "그 아래 원본 페이지 사진에 해당 문장이 **노랗게** 칠해져 있습니다.\n\n"
         "🔍 **글씨가 작아 안 읽히면** — 사진 위에 마우스를 올리면 오른쪽 위에 **↕ 확대 아이콘**이 "
-        "나타납니다. 누르면 화면 가득 크게 볼 수 있습니다. (원본 PDF를 그 페이지에서 직접 보는 것이 "
-        "가장 정확합니다)\n\n"
+        "나타납니다. 누르면 화면 가득 크게 볼 수 있습니다.\n\n"
+        "◀▶ **앞뒤 내용까지 보려면** — 펼친 안에 있는 **이전·다음 페이지도 함께 보기** 를 체크하면 "
+        "앞 페이지 → 해당 페이지 → 뒤 페이지 순서로 3장이 나옵니다.\n\n"
         "직접 눈으로 확인한 항목은 오른쪽 네모에 체크해 두면 어디까지 봤는지 알 수 있습니다. "
         "'찾지 못했습니다' 라고 나오면 그 항목은 이 계약서에 없거나 표현이 많이 달라 못 찾은 것이니, "
         "중요한 항목이면 원본을 한 번 더 확인하세요."
     )
-    opt1, opt2, opt3 = st.columns([0.34, 0.45, 0.21])
+    opt1, opt2 = st.columns([0.45, 0.55])
     show_image = opt1.checkbox("원본 페이지 이미지(형광펜) 함께 보기", value=True)
-    focus_mode = opt1.checkbox(
+    focus_mode = opt2.checkbox(
         "찾은 부분만 잘라서 보기", value=False,
         help="형광펜 친 곳 둘레만 잘라서 보여줍니다. 앞뒤 맥락이 필요하면 체크하지 마세요(기본).",
     )
-    opt2.radio(
-        "기본 이미지 크기", list(IMAGE_WIDTHS), key="img_size",
-        index=list(IMAGE_WIDTHS).index("꽉 채우기"),  # 페이지 전체를 보여주므로 크게가 기본
-        horizontal=True, label_visibility="collapsed",
-    )
-    apply_all = opt3.button("모든 이미지에 적용", use_container_width=True,
-                            help="아래 이미지들의 크기를 지금 고른 크기로 한 번에 맞춥니다.")
-    default_size = st.session_state["img_size"]
 
     # ── 확인 진행바 (스크롤해도 위에 붙어 있음) ──
     all_keys = [
@@ -704,27 +707,61 @@ def render_results(contract):
                     st.caption(f"원문: {item['원문']}")
 
                 if show_image and page and contract:
-                    size_key = f"imgsize_{kw}_{idx}"
-                    if apply_all or size_key not in st.session_state:
-                        st.session_state[size_key] = default_size
-                    size_col, _sp = st.columns([0.45, 0.55])
-                    size_col.radio(
-                        "이미지 크기", list(IMAGE_WIDTHS), key=size_key,
-                        horizontal=True, label_visibility="collapsed",
+                    last_page = len(contract.get("pages") or []) or page
+                    show_around = st.checkbox(
+                        "◀▶ 이전·다음 페이지도 함께 보기", key=f"around_{kw}_{idx}",
+                        help="앞뒤 맥락을 보려면 체크하세요. 이전 페이지 → 해당 페이지 → 다음 페이지 순서로 나옵니다.",
                     )
-                    width = IMAGE_WIDTHS[st.session_state[size_key]]
+                    highlight = item.get("원문") or item.get("내용", "")
+                    view_key = f"pageview_{kw}_{idx}"   # 지금 보고 있는 페이지
+                    st.session_state.setdefault(view_key, page)
                     try:
-                        img = cached_page_image(
-                            contract["pdf_path"], page,
-                            item.get("원문") or item.get("내용", ""),
-                            focus_mode,
-                        )
-                        if width:
-                            # 가운데 정렬: 양옆에 빈 칸을 두고 가운데 칸에 그림
-                            left, mid, right = st.columns([1, 3, 1])
-                            mid.image(img, width=width)
-                        else:
+                        if show_around:
+                            around = [p for p in (page - 1, page, page + 1)
+                                      if 1 <= p <= last_page]
+                            st.caption(
+                                "📄 " + " · ".join(
+                                    f"{p}페이지{' ← 찾은 곳' if p == page else ''}"
+                                    for p in around
+                                )
+                                + "  — 이미지를 누르면 3페이지가 함께 크게 열립니다."
+                            )
+                            img = cached_pages_row(
+                                contract["pdf_path"], tuple(around), page, highlight,
+                            )
                             st.image(img, use_container_width=True)
+                        else:
+                            now = min(max(st.session_state[view_key], 1), last_page)
+                            st.caption(
+                                f"📄 {now}페이지"
+                                + ("  ← 찾은 곳" if now == page else f"  (찾은 곳은 {page}페이지)")
+                                + f"  ·  전체 {last_page}페이지"
+                            )
+                            img = cached_page_image(
+                                contract["pdf_path"], now,
+                                highlight if now == page else "",
+                                focus_mode if now == page else False,
+                            )
+                            _l, mid, _r = st.columns([1, 3, 1])
+                            mid.image(img, width=IMAGE_WIDTH)
+
+                            # 화면 안에서 페이지 넘기기
+                            b1, b2, b3, _sp = st.columns([1, 1, 1.2, 2])
+                            b1.button(
+                                "◀ 이전", key=f"prev_{kw}_{idx}",
+                                disabled=now <= 1, use_container_width=True,
+                                on_click=lambda k=view_key, n=now: st.session_state.update({k: n - 1}),
+                            )
+                            b2.button(
+                                "다음 ▶", key=f"next_{kw}_{idx}",
+                                disabled=now >= last_page, use_container_width=True,
+                                on_click=lambda k=view_key, n=now: st.session_state.update({k: n + 1}),
+                            )
+                            b3.button(
+                                "↺ 찾은 곳으로", key=f"back_{kw}_{idx}",
+                                disabled=now == page, use_container_width=True,
+                                on_click=lambda k=view_key, n=page: st.session_state.update({k: n}),
+                            )
                     except Exception as e:
                         st.caption(f"이미지를 만들지 못했습니다: {e}")
 
