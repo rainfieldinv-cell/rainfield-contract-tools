@@ -17,7 +17,10 @@ from pydantic import BaseModel
 MODEL = "claude-opus-5"
 
 # 한 번에 물어볼 키워드 개수 (많으면 답이 잘릴 수 있어 나눠서 물어봄)
-KEYWORDS_PER_CALL = 6
+KEYWORDS_PER_CALL = 4
+
+# 한 번에 받을 수 있는 답의 최대 길이. 스트리밍으로 받으므로 넉넉히 둡니다.
+MAX_TOKENS = 32000
 
 
 class ScanFinding(BaseModel):
@@ -118,7 +121,14 @@ SCAN_SYSTEM = """당신은 금융 계약서를 검토하는 꼼꼼한 한국어 
  · check   : 계약서에서 구체적으로 무엇을 확인하고, 없으면 무엇을 요구해야 하는지
  · verdict : **이 계약서의 실제 상태**를 한 줄로 (예: "인출 순서는 있으나 원리금이 3순위로 밀려 있음")
 일반론만 쓰지 말고, 위에서 찾은 조항 내용을 반영해 이 계약서에 맞게 쓰세요.
-항목 수와 notes 개수는 같아야 합니다."""
+항목 수와 notes 개수는 같아야 합니다.
+
+━━━ 길이 제한 (꼭 지키세요) ━━━
+답이 너무 길면 중간에 잘려서 아무것도 못 받습니다. 아래를 지키세요.
+ · 한 항목에 조항은 **핵심 3건까지만** (덜 중요한 것은 버리세요)
+ · content 는 3문장 이내, quote 는 **한 문장만** (긴 조문은 핵심 한 문장을 그대로)
+ · why / risk / verdict 는 각각 2문장 이내, check 는 ①~④ 정도까지
+ · 같은 말을 되풀이하지 마세요."""
 
 
 def _build_page_marked_text(pages: list) -> str:
@@ -160,50 +170,82 @@ def scan_contract(pages: list, keywords: list, api_key: str,
     document_text = _build_page_marked_text(pages)
     label = contract_type or "계약서"
 
-    batches = list(_chunks(keywords, KEYWORDS_PER_CALL))
-    for done, batch in enumerate(batches):
-        numbered = "\n".join(f"- {k}" for k in batch)
-        instruction = (
-            f"위 문서는 '{label}' 입니다.\n"
-            f"아래 검토 항목 각각에 대해, 그 주제의 조항을 이 계약서에서 찾아 정리하세요.\n"
-            f"**아래 항목은 하나도 빠짐없이 모두 결과에 넣으세요.** "
-            f"관련 조항이 없으면 judgment 를 '조항 없음' 으로 해서 넣으세요.\n\n"
-            f"[검토 항목]\n{numbered}\n\n"
-            f"각 항목마다 먼저 **쟁점(topic)** 을 한 줄로 정한 뒤, 그 쟁점을 규율하는 조항을 찾으세요. "
-            f"항목에 들어간 단어가 포함된 문장을 찾는 방식은 금지입니다.\n"
-            f"각 내용을 keyword/topic/item/content/quote/page/judgment 로 정리하세요. "
-            f"keyword 는 위 목록의 문장을 그대로 사용하세요.\n"
-            f"그리고 notes 에 **항목마다 하나씩** 대주 입장 코멘트"
-            f"(why/risk/check/verdict)를 넣으세요. 위 항목 {len(batch)}개 모두 필요합니다."
-        )
+    # 묶음 단위로 물어봅니다. 답이 잘려서 실패하면 그 묶음을 반으로 쪼개 다시 시도합니다.
+    queue = list(_chunks(keywords, KEYWORDS_PER_CALL))
+    done, total = 0, len(queue)
+    last_error = None
 
-        response = client.messages.parse(
-            model=MODEL,
-            max_tokens=16000,
-            system=SCAN_SYSTEM,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        # 계약서 본문은 매번 똑같으므로 캐시해서 비용·시간을 아낌
-                        "type": "text",
-                        "text": f"계약서 본문:\n\"\"\"\n{document_text}\n\"\"\"",
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {"type": "text", "text": instruction},
-                ],
-            }],
-            output_format=ScanResult,
-        )
+    while queue:
+        batch = queue.pop(0)
+        try:
+            parsed = _ask_claude(client, document_text, label, batch)
+        except Exception as e:  # 답이 잘림·일시적 오류 → 쪼개서 재시도
+            last_error = e
+            if len(batch) > 1:
+                half = len(batch) // 2
+                queue.insert(0, batch[half:])
+                queue.insert(0, batch[:half])
+                total += 1
+                continue
+            # 항목 한 개인데도 실패하면 그 항목만 비워 두고 계속 진행
+            done += 1
+            if progress_callback:
+                progress_callback(done, max(total, done))
+            continue
 
-        parsed = response.parsed_output
         _collect(parsed.findings, batch, result)
         _collect_notes(getattr(parsed, "notes", None) or [], batch, result, notes)
 
+        done += 1
         if progress_callback:
-            progress_callback(done + 1, len(batches))
+            progress_callback(done, max(total, done))
+
+    # 한 항목도 못 받았으면 원인을 알려줍니다(전부 실패한 경우만)
+    if last_error is not None and not any(result.values()) and not notes:
+        raise last_error
 
     return result, notes
+
+
+def _ask_claude(client, document_text: str, label: str, batch: list):
+    """묶음 하나를 클로드에게 물어봅니다. (스트리밍 — 긴 답도 잘리지 않게)"""
+    numbered = "\n".join(f"- {k}" for k in batch)
+    instruction = (
+        f"위 문서는 '{label}' 입니다.\n"
+        f"아래 검토 항목 각각에 대해, 그 주제의 조항을 이 계약서에서 찾아 정리하세요.\n"
+        f"**아래 항목은 하나도 빠짐없이 모두 결과에 넣으세요.** "
+        f"관련 조항이 없으면 judgment 를 '조항 없음' 으로 해서 넣으세요.\n\n"
+        f"[검토 항목]\n{numbered}\n\n"
+        f"각 항목마다 먼저 **쟁점(topic)** 을 한 줄로 정한 뒤, 그 쟁점을 규율하는 조항을 찾으세요. "
+        f"항목에 들어간 단어가 포함된 문장을 찾는 방식은 금지입니다.\n"
+        f"각 내용을 keyword/topic/item/content/quote/page/judgment 로 정리하세요. "
+        f"keyword 는 위 목록의 문장을 그대로 사용하세요.\n"
+        f"그리고 notes 에 **항목마다 하나씩** 대주 입장 코멘트"
+        f"(why/risk/check/verdict)를 넣으세요. 위 항목 {len(batch)}개 모두 필요합니다.\n"
+        f"길이 제한(항목당 조항 3건·quote 한 문장)을 반드시 지키세요."
+    )
+
+    with client.messages.stream(
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        system=SCAN_SYSTEM,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    # 계약서 본문은 매번 똑같으므로 캐시해서 비용·시간을 아낌
+                    "type": "text",
+                    "text": f"계약서 본문:\n\"\"\"\n{document_text}\n\"\"\"",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": instruction},
+            ],
+        }],
+        output_format=ScanResult,
+    ) as stream:
+        message = stream.get_final_message()
+
+    return message.parsed_output
 
 
 def _match_keyword(name: str, batch_keywords: list, result: dict):

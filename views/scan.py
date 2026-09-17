@@ -483,8 +483,21 @@ def render_step2():
 
     # ── 찾기 실행 (같은 단계에서 바로) ──
     st.divider()
+
+    # 글자가 없는 PDF(스캔본)로는 찾을 수 없습니다 — 미리 막아줍니다.
+    text_chars = sum(len(p.get("text") or "") for p in (contract or {}).get("pages", []))
+    no_text = bool(contract) and text_chars < 200
+    if no_text:
+        st.error(
+            "🚫 **이 파일은 글자가 없어서 찾을 수 없습니다.** (읽어낸 글자 "
+            f"{text_chars}자)\n\n"
+            "스캔(사진)으로 만든 PDF입니다. **① 계약서 올리기** 로 돌아가서 "
+            "**워드 원본을 `F12` → PDF로 저장한 파일**을 올리거나, 그 화면의 "
+            "**OCR로 글자 읽기** 버튼을 먼저 눌러주세요."
+        )
+
     run_col, reset_col, _sp = st.columns([1.8, 1, 3])
-    ready = bool(contract) and bool(selected)
+    ready = bool(contract) and bool(selected) and not no_text
     run_clicked = run_col.button(
         f"🔎 고른 항목 {len(selected)}개 찾기",
         type="primary", use_container_width=True, disabled=not ready,
